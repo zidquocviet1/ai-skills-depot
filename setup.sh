@@ -23,6 +23,161 @@ if [ ! -d "roles" ]; then
     exit 1
 fi
 
+load_skill_aliases() {
+    skill_aliases_json=""
+
+    if [ -f "skill-aliases.json" ]; then
+        skill_aliases_json=$(cat skill-aliases.json)
+    fi
+}
+
+submodule_alias_for() {
+    local module_path=$1
+    local module_slug
+    module_slug=$(basename "$module_path")
+
+    if [ -z "$skill_aliases_json" ]; then
+        default_submodule_alias_for "$module_path"
+        return
+    fi
+
+    local alias
+    alias=$(printf '%s\n' "$skill_aliases_json" \
+        | awk -v key="$module_path" '
+            $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                sub(/".*$/, "")
+                print
+                exit
+            }
+        ')
+
+    if [ -z "$alias" ]; then
+        alias=$(printf '%s\n' "$skill_aliases_json" \
+            | awk -v key="$module_slug" '
+                $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                    sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                    sub(/".*$/, "")
+                    print
+                    exit
+                }
+            ')
+    fi
+
+    if [ -n "$alias" ]; then
+        printf '%s' "$alias"
+    else
+        default_submodule_alias_for "$module_path"
+    fi
+}
+
+default_submodule_alias_for() {
+    local module_path=$1
+    local module_slug
+    module_slug=$(basename "$module_path")
+
+    case "$module_path" in
+        "collected/garrytan-gstack" | "garrytan-gstack")
+            printf '%s' "gstack"
+            ;;
+        "collected/mattocock-skills" | "mattocock-skills")
+            printf '%s' "mott"
+            ;;
+        *)
+            printf '%s' "$module_slug"
+            ;;
+    esac
+}
+
+prefix_skill_name_in_file() {
+    local skill_file=$1
+    local alias=$2
+
+    if [ -z "$alias" ] || [ ! -f "$skill_file" ]; then
+        return
+    fi
+
+    local tmp_file="${skill_file}.tmp"
+    awk -v alias="$alias" '
+        BEGIN { in_frontmatter = 0; updated = 0 }
+        NR == 1 && $0 == "---" { in_frontmatter = 1 }
+        in_frontmatter && !updated && /^name:[[:space:]]*/ {
+            name = $0
+            sub(/^name:[[:space:]]*/, "", name)
+            gsub(/^"|"$/, "", name)
+            gsub(/^'\''|'\''$/, "", name)
+            if (name !~ "^" alias ":") {
+                print "name: " alias ":" name
+                updated = 1
+                next
+            }
+        }
+        in_frontmatter && NR > 1 && $0 == "---" { in_frontmatter = 0 }
+        { print }
+    ' "$skill_file" > "$tmp_file"
+    mv "$tmp_file" "$skill_file"
+}
+
+load_submodules() {
+    submodule_names=()
+    submodule_paths=()
+
+    if [ ! -f ".gitmodules" ]; then
+        return
+    fi
+
+    local current_name=""
+    local current_path=""
+
+    while IFS= read -r line; do
+        case "$line" in
+            \[submodule*)
+                current_name=$(printf '%s' "$line" | sed -E 's/^\[submodule "([^"]+)"\]$/\1/')
+                current_path=""
+                ;;
+            *path\ =\ *)
+                current_path=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*path = //')
+                if [ -n "$current_path" ]; then
+                    submodule_names+=("${current_name:-$current_path}")
+                    submodule_paths+=("$current_path")
+                fi
+                ;;
+        esac
+    done < ".gitmodules"
+}
+
+select_submodules() {
+    selected_submodule_indexes=()
+
+    if [ ${#submodule_names[@]} -eq 0 ]; then
+        echo -e "${YELLOW}No git submodules found in this repository.${NC}"
+        return
+    fi
+
+    echo -e "\nAvailable skill submodules:"
+    for i in "${!submodule_names[@]}"; do
+        printf "  %d) %s\n" "$((i + 1))" "${submodule_names[$i]}"
+    done
+
+    echo -e "${YELLOW}Enter submodule numbers separated by spaces, or 'a' for all:${NC}"
+    read -r module_choices
+
+    if [[ "$module_choices" =~ ^[Aa]$ ]]; then
+        for i in "${!submodule_names[@]}"; do
+            selected_submodule_indexes+=("$i")
+        done
+        return
+    fi
+
+    for choice in $module_choices; do
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#submodule_names[@]}" ]; then
+            selected_submodule_indexes+=("$((choice - 1))")
+        else
+            echo -e "${YELLOW}Skipping invalid submodule selection: $choice${NC}"
+        fi
+    done
+}
+
 # 1. Select Platform
 echo -e "\n${BLUE}Step 1: Select your AI Platform${NC}"
 platforms=("Antigravity (.agent/skills/)" "Cursor (.agent/skills/)" "Claude Code (.claude/skills/)" "Custom/Manual" "Quit")
@@ -72,8 +227,24 @@ select role_choice in "${role_options[@]}"; do
     fi
 done
 
-# 3. Destination Directory
-echo -e "\n${BLUE}Step 3: Enter Target Project Directory${NC}"
+# 3. Select Submodule Skill Collections
+load_skill_aliases
+load_submodules
+install_submodule_skills="n"
+selected_submodule_indexes=()
+
+if [ ${#submodule_names[@]} -gt 0 ]; then
+    echo -e "\n${BLUE}Step 3: Install skills from git submodules?${NC}"
+    echo -e "Found ${GREEN}${#submodule_names[@]}${NC} skill submodule collection(s)."
+    read -p "Do you want to install skills from submodules too? (y/n): " install_submodule_skills
+
+    if [[ "$install_submodule_skills" =~ ^[Yy]$ ]]; then
+        select_submodules
+    fi
+fi
+
+# 4. Destination Directory
+echo -e "\n${BLUE}Step 4: Enter Target Project Directory${NC}"
 read -p "Path to your project (default: .): " target_path
 target_path=${target_path:-"."}
 
@@ -88,7 +259,7 @@ if [ ! -d "$target_path" ]; then
     fi
 fi
 
-# 4. Resolve Skills to Install
+# 5. Resolve Skills to Install
 skills_to_install=()
 if [ "$role_choice" == "All Roles" ]; then
     echo "Collecting all available skills..."
@@ -102,29 +273,74 @@ else
     done < <(find "roles/$role_choice" -name "SKILL.md")
 fi
 
-if [ ${#skills_to_install[@]} -eq 0 ]; then
+submodule_skills_to_install=()
+if [[ "$install_submodule_skills" =~ ^[Yy]$ ]] && [ ${#selected_submodule_indexes[@]} -gt 0 ]; then
+    echo "Scanning selected submodules for SKILL.md files..."
+
+    for module_index in "${selected_submodule_indexes[@]}"; do
+        module_path="${submodule_paths[$module_index]}"
+
+        if [ ! -d "$module_path" ]; then
+            echo -e "${YELLOW}Skipping ${submodule_names[$module_index]}: directory $module_path is not initialized.${NC}"
+            echo "Run: git submodule update --init --recursive $module_path"
+            continue
+        fi
+
+        while IFS= read -r skill_file; do
+            submodule_skills_to_install+=("$module_path|$skill_file")
+        done < <(find "$module_path" -name "SKILL.md")
+    done
+fi
+
+if [ ${#skills_to_install[@]} -eq 0 ] && [ ${#submodule_skills_to_install[@]} -eq 0 ]; then
     echo -e "${RED}No skills found for selection: $role_choice${NC}"
     exit 1
 fi
 
-echo -e "\nFound ${GREEN}${#skills_to_install[@]}${NC} skills to install."
+echo -e "\nFound ${GREEN}${#skills_to_install[@]}${NC} repo skills to install."
+if [ ${#submodule_skills_to_install[@]} -gt 0 ]; then
+    echo -e "Found ${GREEN}${#submodule_skills_to_install[@]}${NC} submodule skills to install."
+fi
 
-# 5. Perform Installation
+# 6. Perform Installation
 install_skill() {
     local source_file=$1
     local skill_dir=$(dirname "$source_file")
     local skill_name=$(basename "$skill_dir")
-    local role_path=${skill_dir#roles/} # Remove 'roles/' prefix
     
-    # Generic folder installation for all requested paths
-    local dest_dir="$target_path/$target_base/$role_path"
+    local dest_dir="$target_path/$target_base/$skill_name"
     echo "Installing $skill_name to $dest_dir/..."
     mkdir -p "$dest_dir"
     cp -r "$skill_dir/"* "$dest_dir/"
 }
 
+install_submodule_skill() {
+    local module_path=$1
+    local source_file=$2
+    local module_alias
+    module_alias=$(submodule_alias_for "$module_path")
+    local skill_dir=$(dirname "$source_file")
+    local skill_name=$(basename "$skill_dir")
+
+    if [ "$skill_dir" == "$module_path" ]; then
+        skill_name=$(basename "$module_path")
+    fi
+
+    local dest_dir="$target_path/$target_base/$module_alias:$skill_name"
+
+    echo "Installing $module_alias:$skill_name to $dest_dir/..."
+    mkdir -p "$dest_dir"
+    cp -r "$skill_dir/"* "$dest_dir/"
+    prefix_skill_name_in_file "$dest_dir/SKILL.md" "$module_alias"
+}
+
 for skill in "${skills_to_install[@]}"; do
     install_skill "$skill"
+done
+
+for skill_spec in "${submodule_skills_to_install[@]}"; do
+    IFS='|' read -r module_path skill_file <<< "$skill_spec"
+    install_submodule_skill "$module_path" "$skill_file"
 done
 
 echo -e "\n${GREEN}Success!${NC} Skills installed to ${YELLOW}$target_path/${target_base}${NC}"
