@@ -1,3 +1,6 @@
 [submodule "collected/mattocock-skills"]
 	path = collected/mattocock-skills
 	url = https://github.com/mattpocock/skills.git
+[submodule "collected/garrytan-gstack"]
+	path = collected/garrytan-gstack
+	url = https://github.com/garrytan/gstack.git
