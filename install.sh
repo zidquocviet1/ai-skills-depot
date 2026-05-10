@@ -83,7 +83,7 @@ submodule_alias_for() {
     module_slug=$(basename "$module_path")
 
     if [ -z "$skill_aliases_json" ]; then
-        printf '%s' "$module_slug"
+        default_submodule_alias_for "$module_path"
         return
     fi
 
@@ -110,7 +110,29 @@ submodule_alias_for() {
             ')
     fi
 
-    printf '%s' "${alias:-$module_slug}"
+    if [ -n "$alias" ]; then
+        printf '%s' "$alias"
+    else
+        default_submodule_alias_for "$module_path"
+    fi
+}
+
+default_submodule_alias_for() {
+    local module_path=$1
+    local module_slug
+    module_slug=$(basename "$module_path")
+
+    case "$module_path" in
+        "collected/garrytan-gstack" | "garrytan-gstack")
+            printf '%s' "gstack"
+            ;;
+        "collected/mattocock-skills" | "mattocock-skills")
+            printf '%s' "mott"
+            ;;
+        *)
+            printf '%s' "$module_slug"
+            ;;
+    esac
 }
 
 prefix_skill_name_in_file() {
