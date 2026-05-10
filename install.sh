@@ -188,6 +188,60 @@ github_skill_paths() {
         || true
 }
 
+github_blob_paths_under() {
+    local owner_repo=$1
+    local branch=$2
+    local source_dir=$3
+
+    curl -s "https://api.github.com/repos/$owner_repo/git/trees/$branch?recursive=1" \
+        | awk -v prefix="$source_dir/" '
+            /"path"[[:space:]]*:/ {
+                path = $0
+                sub(/.*"path"[[:space:]]*:[[:space:]]*"/, "", path)
+                sub(/".*/, "", path)
+            }
+            /"type"[[:space:]]*:[[:space:]]*"blob"/ {
+                if (index(path, prefix) == 1) {
+                    print path
+                }
+            }
+        ' \
+        || true
+}
+
+download_github_directory() {
+    local owner_repo=$1
+    local branch=$2
+    local source_dir=$3
+    local dest_dir=$4
+    local raw_base="https://raw.githubusercontent.com/$owner_repo/$branch"
+    local file_paths
+
+    if [ "$source_dir" == "." ]; then
+        mkdir -p "$dest_dir"
+        curl -sSL "$raw_base/SKILL.md" -o "$dest_dir/SKILL.md"
+        curl -sSL -f "$raw_base/README.md" -o "$dest_dir/README.md" 2>/dev/null || true
+        return
+    fi
+
+    file_paths=$(github_blob_paths_under "$owner_repo" "$branch" "$source_dir")
+
+    if [ -z "$file_paths" ]; then
+        echo -e "${YELLOW}No files found under $source_dir in $owner_repo.${NC}"
+        return
+    fi
+
+    mkdir -p "$dest_dir"
+
+    while IFS= read -r file_path; do
+        local relative_path=${file_path#"$source_dir"/}
+        local dest_file="$dest_dir/$relative_path"
+
+        mkdir -p "$(dirname "$dest_file")"
+        curl -sSL "$raw_base/$file_path" -o "$dest_file"
+    done <<< "$file_paths"
+}
+
 select_submodules() {
     selected_submodule_indexes=()
 
@@ -323,18 +377,10 @@ for remote_path in "${filtered_skills[@]}"; do
     # Extract info
     skill_dir=$(dirname "$remote_path")    # e.g., roles/backend/java/solid-principles
     skill_name=$(basename "$skill_dir")
-    
-    url="$BASE_URL/$remote_path"
     dest_dir="$target_base/$skill_name"
     
     echo "Downloading $skill_name to ./$dest_dir/..."
-    mkdir -p "$dest_dir"
-    curl -sSL "$url" -o "$dest_dir/SKILL.md"
-    
-    # Check if there is a README in the remote directory
-    # We can try to guess its existence by downloading it, silenty failing if 404
-    readme_url="${url%SKILL.md}README.md"
-    curl -sSL -f "$readme_url" -o "$dest_dir/README.md" 2>/dev/null || true
+    download_github_directory "$REPO_OWNER/$REPO_NAME" "$BRANCH" "$skill_dir" "$dest_dir"
 done
 
 for skill_spec in "${submodule_skills[@]}"; do
@@ -346,16 +392,11 @@ for skill_spec in "${submodule_skills[@]}"; do
         skill_name=$(basename "$owner_repo")
     fi
 
-    url="https://raw.githubusercontent.com/$owner_repo/$module_branch/$remote_path"
     dest_dir="$target_base/$module_alias:$skill_name"
 
     echo "Downloading $module_alias:$skill_name to ./$dest_dir/..."
-    mkdir -p "$dest_dir"
-    curl -sSL "$url" -o "$dest_dir/SKILL.md"
+    download_github_directory "$owner_repo" "$module_branch" "$skill_dir" "$dest_dir"
     prefix_skill_name_in_file "$dest_dir/SKILL.md" "$module_alias"
-
-    readme_url="${url%SKILL.md}README.md"
-    curl -sSL -f "$readme_url" -o "$dest_dir/README.md" 2>/dev/null || true
 done
 
 echo -e "\n${GREEN}Success!${NC} Skills installed to ${YELLOW}./$target_base${NC}"

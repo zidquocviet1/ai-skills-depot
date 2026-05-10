@@ -311,7 +311,7 @@ install_skill() {
     local dest_dir="$target_path/$target_base/$skill_name"
     echo "Installing $skill_name to $dest_dir/..."
     mkdir -p "$dest_dir"
-    cp -r "$skill_dir/"* "$dest_dir/"
+    cp -R "$skill_dir/." "$dest_dir/"
 }
 
 install_submodule_skill() {
@@ -330,7 +330,7 @@ install_submodule_skill() {
 
     echo "Installing $module_alias:$skill_name to $dest_dir/..."
     mkdir -p "$dest_dir"
-    cp -r "$skill_dir/"* "$dest_dir/"
+    cp -R "$skill_dir/." "$dest_dir/"
     prefix_skill_name_in_file "$dest_dir/SKILL.md" "$module_alias"
 }
 
