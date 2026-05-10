@@ -23,6 +23,79 @@ if [ ! -d "roles" ]; then
     exit 1
 fi
 
+load_skill_aliases() {
+    skill_aliases_json=""
+
+    if [ -f "skill-aliases.json" ]; then
+        skill_aliases_json=$(cat skill-aliases.json)
+    fi
+}
+
+submodule_alias_for() {
+    local module_path=$1
+    local module_slug
+    module_slug=$(basename "$module_path")
+
+    if [ -z "$skill_aliases_json" ]; then
+        printf '%s' "$module_slug"
+        return
+    fi
+
+    local alias
+    alias=$(printf '%s\n' "$skill_aliases_json" \
+        | awk -v key="$module_path" '
+            $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                sub(/".*$/, "")
+                print
+                exit
+            }
+        ')
+
+    if [ -z "$alias" ]; then
+        alias=$(printf '%s\n' "$skill_aliases_json" \
+            | awk -v key="$module_slug" '
+                $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                    sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                    sub(/".*$/, "")
+                    print
+                    exit
+                }
+            ')
+    fi
+
+    printf '%s' "${alias:-$module_slug}"
+}
+
+prefix_skill_name_in_file() {
+    local skill_file=$1
+    local alias=$2
+
+    if [ -z "$alias" ] || [ ! -f "$skill_file" ]; then
+        return
+    fi
+
+    local tmp_file="${skill_file}.tmp"
+    awk -v alias="$alias" '
+        BEGIN { in_frontmatter = 0; updated = 0 }
+        NR == 1 && $0 == "---" { in_frontmatter = 1 }
+        in_frontmatter && !updated && /^name:[[:space:]]*/ {
+            name = $0
+            sub(/^name:[[:space:]]*/, "", name)
+            gsub(/^"|"$/, "", name)
+            gsub(/^'\''|'\''$/, "", name)
+            if (name !~ "^" alias ":") {
+                print "name: " alias ":" name
+                updated = 1
+                next
+            }
+        }
+        in_frontmatter && NR > 1 && $0 == "---" { in_frontmatter = 0 }
+        { print }
+    ' "$skill_file" > "$tmp_file"
+    mv "$tmp_file" "$skill_file"
+}
+
 load_submodules() {
     submodule_names=()
     submodule_paths=()
@@ -133,6 +206,7 @@ select role_choice in "${role_options[@]}"; do
 done
 
 # 3. Select Submodule Skill Collections
+load_skill_aliases
 load_submodules
 install_submodule_skills="n"
 selected_submodule_indexes=()
@@ -211,10 +285,8 @@ install_skill() {
     local source_file=$1
     local skill_dir=$(dirname "$source_file")
     local skill_name=$(basename "$skill_dir")
-    local role_path=${skill_dir#roles/} # Remove 'roles/' prefix
     
-    # Generic folder installation for all requested paths
-    local dest_dir="$target_path/$target_base/$role_path"
+    local dest_dir="$target_path/$target_base/$skill_name"
     echo "Installing $skill_name to $dest_dir/..."
     mkdir -p "$dest_dir"
     cp -r "$skill_dir/"* "$dest_dir/"
@@ -223,26 +295,21 @@ install_skill() {
 install_submodule_skill() {
     local module_path=$1
     local source_file=$2
-    local module_slug=$(basename "$module_path")
+    local module_alias
+    module_alias=$(submodule_alias_for "$module_path")
     local skill_dir=$(dirname "$source_file")
-    local relative_dir=${skill_dir#"$module_path"/}
     local skill_name=$(basename "$skill_dir")
 
-    if [ "$relative_dir" == "$skill_dir" ] || [ "$relative_dir" == "." ]; then
-        relative_dir=""
-        skill_name="$module_slug"
-    else
-        relative_dir=${relative_dir#skills/}
+    if [ "$skill_dir" == "$module_path" ]; then
+        skill_name=$(basename "$module_path")
     fi
 
-    local dest_dir="$target_path/$target_base/$module_slug"
-    if [ -n "$relative_dir" ]; then
-        dest_dir="$dest_dir/$relative_dir"
-    fi
+    local dest_dir="$target_path/$target_base/$module_alias:$skill_name"
 
-    echo "Installing $module_slug/$skill_name to $dest_dir/..."
+    echo "Installing $module_alias:$skill_name to $dest_dir/..."
     mkdir -p "$dest_dir"
     cp -r "$skill_dir/"* "$dest_dir/"
+    prefix_skill_name_in_file "$dest_dir/SKILL.md" "$module_alias"
 }
 
 for skill in "${skills_to_install[@]}"; do

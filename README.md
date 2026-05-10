@@ -38,6 +38,8 @@ chmod +x setup.sh
 
 The local setup script can also scan initialized git submodules for `SKILL.md` files and copy the selected skill folders into your target AI agent skills directory.
 
+Submodule skill aliases are configured in `skill-aliases.json`. The installer uses those aliases to prefix installed submodule skill folders and `name:` frontmatter, such as `gstack:ship` or `mott:tdd`.
+
 ### Manual Installation
 
 If you prefer to install manually, you can simply copy the relevant files:

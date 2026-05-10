@@ -12,6 +12,7 @@ BRANCH="main"
 BASE_URL="https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$BRANCH"
 API_URL="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/git/trees/$BRANCH?recursive=1"
 GITMODULES_URL="$BASE_URL/.gitmodules"
+ALIASES_URL="$BASE_URL/skill-aliases.json"
 
 # Colors for better UI
 GREEN='\033[0;32m'
@@ -70,6 +71,75 @@ fetch_submodules() {
                 ;;
         esac
     done <<< "$gitmodules"
+}
+
+fetch_skill_aliases() {
+    skill_aliases_json=$(curl -sSL "$ALIASES_URL" 2>/dev/null || true)
+}
+
+submodule_alias_for() {
+    local module_path=$1
+    local module_slug
+    module_slug=$(basename "$module_path")
+
+    if [ -z "$skill_aliases_json" ]; then
+        printf '%s' "$module_slug"
+        return
+    fi
+
+    local alias
+    alias=$(printf '%s\n' "$skill_aliases_json" \
+        | awk -v key="$module_path" '
+            $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                sub(/".*$/, "")
+                print
+                exit
+            }
+        ')
+
+    if [ -z "$alias" ]; then
+        alias=$(printf '%s\n' "$skill_aliases_json" \
+            | awk -v key="$module_slug" '
+                $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+                    sub(/^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"/, "")
+                    sub(/".*$/, "")
+                    print
+                    exit
+                }
+            ')
+    fi
+
+    printf '%s' "${alias:-$module_slug}"
+}
+
+prefix_skill_name_in_file() {
+    local skill_file=$1
+    local alias=$2
+
+    if [ -z "$alias" ] || [ ! -f "$skill_file" ]; then
+        return
+    fi
+
+    local tmp_file="${skill_file}.tmp"
+    awk -v alias="$alias" '
+        BEGIN { in_frontmatter = 0; updated = 0 }
+        NR == 1 && $0 == "---" { in_frontmatter = 1 }
+        in_frontmatter && !updated && /^name:[[:space:]]*/ {
+            name = $0
+            sub(/^name:[[:space:]]*/, "", name)
+            gsub(/^"|"$/, "", name)
+            gsub(/^'\''|'\''$/, "", name)
+            if (name !~ "^" alias ":") {
+                print "name: " alias ":" name
+                updated = 1
+                next
+            }
+        }
+        in_frontmatter && NR > 1 && $0 == "---" { in_frontmatter = 0 }
+        { print }
+    ' "$skill_file" > "$tmp_file"
+    mv "$tmp_file" "$skill_file"
 }
 
 github_owner_repo_from_url() {
@@ -163,6 +233,7 @@ done
 
 # 4. Select Submodule Skill Collections
 fetch_submodules
+fetch_skill_aliases
 install_submodule_skills="n"
 selected_submodule_indexes=()
 
@@ -195,7 +266,7 @@ if [[ "$install_submodule_skills" =~ ^[Yy]$ ]] && [ ${#selected_submodule_indexe
     for module_index in "${selected_submodule_indexes[@]}"; do
         module_name="${submodule_names[$module_index]}"
         module_path="${submodule_paths[$module_index]}"
-        module_slug=$(basename "$module_path")
+        module_alias=$(submodule_alias_for "$module_path")
         module_url="${submodule_urls[$module_index]}"
         owner_repo=$(github_owner_repo_from_url "$module_url")
 
@@ -213,7 +284,7 @@ if [[ "$install_submodule_skills" =~ ^[Yy]$ ]] && [ ${#selected_submodule_indexe
         fi
 
         while IFS= read -r skill_path; do
-            submodule_skills+=("$module_slug|$owner_repo|$module_branch|$skill_path")
+            submodule_skills+=("$module_alias|$owner_repo|$module_branch|$skill_path")
         done <<< "$module_skill_paths"
 
         echo -e "Found ${GREEN}$(printf '%s\n' "$module_skill_paths" | sed '/^$/d' | wc -l | tr -d ' ')${NC} skills in $module_name."
@@ -228,12 +299,11 @@ fi
 # 6. Perform Installation
 for remote_path in "${filtered_skills[@]}"; do
     # Extract info
-    role_path=${remote_path#roles/}      # e.g., backend/java/solid-principles/SKILL.md
-    skill_dir=$(dirname "$role_path")    # e.g., backend/java/solid-principles
+    skill_dir=$(dirname "$remote_path")    # e.g., roles/backend/java/solid-principles
     skill_name=$(basename "$skill_dir")
     
     url="$BASE_URL/$remote_path"
-    dest_dir="$target_base/$skill_dir"
+    dest_dir="$target_base/$skill_name"
     
     echo "Downloading $skill_name to ./$dest_dir/..."
     mkdir -p "$dest_dir"
@@ -246,24 +316,21 @@ for remote_path in "${filtered_skills[@]}"; do
 done
 
 for skill_spec in "${submodule_skills[@]}"; do
-    IFS='|' read -r module_name owner_repo module_branch remote_path <<< "$skill_spec"
+    IFS='|' read -r module_alias owner_repo module_branch remote_path <<< "$skill_spec"
     skill_dir=$(dirname "$remote_path")
     skill_name=$(basename "$skill_dir")
 
     if [ "$skill_dir" == "." ]; then
-        install_path="$module_name"
-        skill_name="$module_name"
-    else
-        install_path=${skill_dir#skills/}
-        install_path="$module_name/$install_path"
+        skill_name=$(basename "$owner_repo")
     fi
 
     url="https://raw.githubusercontent.com/$owner_repo/$module_branch/$remote_path"
-    dest_dir="$target_base/$install_path"
+    dest_dir="$target_base/$module_alias:$skill_name"
 
-    echo "Downloading $module_name/$skill_name to ./$dest_dir/..."
+    echo "Downloading $module_alias:$skill_name to ./$dest_dir/..."
     mkdir -p "$dest_dir"
     curl -sSL "$url" -o "$dest_dir/SKILL.md"
+    prefix_skill_name_in_file "$dest_dir/SKILL.md" "$module_alias"
 
     readme_url="${url%SKILL.md}README.md"
     curl -sSL -f "$readme_url" -o "$dest_dir/README.md" 2>/dev/null || true
