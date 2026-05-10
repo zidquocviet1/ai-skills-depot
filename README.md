@@ -22,7 +22,8 @@ No need to clone this repository. You can install all skills directly from your 
 1. **Run the command** in your terminal.
 2. **Select Platform**: Choose the format expected by your AI tool (Antigravity, Cursor, or Claude Code). The script handles the root folder creation (`.agent/` or `.claude/`).
 3. **Select Role(s)**: Opt for "All Roles" or specific domains (e.g., `backend`, `frontend`, `tester`).
-4. **Profit!** The skills will be added to your current directory immediately.
+4. **Optional Submodule Skills**: If the repo includes skill collections as git submodules, choose whether to install them and which collections to include.
+5. **Profit!** The skills will be added to your current directory immediately.
 
 ---
 
@@ -34,6 +35,8 @@ If you want to contribute new skills, you can pull the repository and use the lo
 chmod +x setup.sh
 ./setup.sh
 ```
+
+The local setup script can also scan initialized git submodules for `SKILL.md` files and copy the selected skill folders into your target AI agent skills directory.
 
 ### Manual Installation
 
