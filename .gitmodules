@@ -4,3 +4,6 @@
 [submodule "collected/garrytan-gstack"]
 	path = collected/garrytan-gstack
 	url = https://github.com/garrytan/gstack.git
+[submodule "collected/redpanda-data"]
+	path = collected/redpanda-data
+	url = https://github.com/redpanda-data/skills.git
